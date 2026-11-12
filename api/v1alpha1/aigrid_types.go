@@ -49,7 +49,9 @@ type GitOpsSpec struct {
 	// +optional
 	Revision string `json:"revision,omitempty"`
 
-	// Path is the path within the repository for the root Application.
+	// Path is the bootstrap directory within the repository containing
+	// the root ApplicationSet (the fan-out that installs everything,
+	// ACM included). Defaults to bootstrap/dedicated-hub.
 	// +optional
 	Path string `json:"path,omitempty"`
 }

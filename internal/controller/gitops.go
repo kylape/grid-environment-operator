@@ -51,32 +51,6 @@ func (r *AIGridReconciler) installGitOps(ctx context.Context, grid *aigridv1alph
 		}
 	}
 
-	// The root Application: points the hub's Argo at the grid's repo.
-	application := object(applicationGVK, gitOpsNamespace, grid.Name)
-	if _, err := controllerutil.CreateOrUpdate(ctx, hub, application, func() error {
-		if err := unstructured.SetNestedMap(application.Object, map[string]interface{}{
-			"repoURL":        grid.Spec.GitOps.Repo,
-			"targetRevision": defaultString(grid.Spec.GitOps.Revision, "main"),
-			"path":           defaultString(grid.Spec.GitOps.Path, "."),
-		}, "spec", "source"); err != nil {
-			return err
-		}
-		if err := unstructured.SetNestedMap(application.Object, map[string]interface{}{
-			"server":    "https://kubernetes.default.svc",
-			"namespace": grid.Namespace,
-		}, "spec", "destination"); err != nil {
-			return err
-		}
-		if err := unstructured.SetNestedField(application.Object, "default", "spec", "project"); err != nil {
-			return err
-		}
-		return unstructured.SetNestedMap(application.Object, map[string]interface{}{
-			"automated": map[string]interface{}{"selfHeal": true},
-		}, "spec", "syncPolicy")
-	}); err != nil {
-		return false, err
-	}
-
 	// Annotate the OperatorGroups once the fan-out creates them.
 	for _, site := range spokeSites(grid) {
 		guest, err := r.siteKubeconfig(ctx, grid, SiteName(grid, site))
@@ -86,6 +60,13 @@ func (r *AIGridReconciler) installGitOps(ctx context.Context, grid *aigridv1alph
 		if err := r.annotateOperatorGroups(ctx, guest); err != nil {
 			return false, err
 		}
+	}
+
+	// The root Application was created by the HubBootstrapped phase; this
+	// phase waits for it to finish syncing the fan-out.
+	application, err := getUnstructured(ctx, hub, applicationGVK, gitOpsNamespace, grid.Name)
+	if err != nil {
+		return false, client.IgnoreNotFound(err)
 	}
 
 	// Readiness: the root Application reports Synced.

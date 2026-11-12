@@ -58,14 +58,18 @@ func (r *AIGridReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Reconcile is a phase machine; each phase is idempotent and returns
 	// done=false while its work is still in flight (sites booting, imports
-	// joining, GitOps syncing). Phases run strictly in order except Wiring
-	// and GitOpsSynced, which overlap by design: the grid's own connect
-	// checks retry, so the grid can install while DNS wiring lands.
+	// joining, GitOps syncing). Phases are strictly sequential in v1: each
+	// must complete before the next begins. The ordering is sound because
+	// wiring only needs site control planes (not the grid), and the grid's
+	// own connect checks retry — so installing the grid after wiring means
+	// it comes up green on the first try. Overlapping Wiring and
+	// GitOpsSynced is a possible future optimization, not implemented.
 	steps := []struct {
 		condition string
 		run       func(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, error)
 	}{
 		{aigridv1alpha1.ConditionProvisioned, r.provision},
+		{aigridv1alpha1.ConditionHubBootstrapped, r.bootstrapHub},
 		{aigridv1alpha1.ConditionImported, r.importSites},
 		{aigridv1alpha1.ConditionWired, r.wire},
 		{aigridv1alpha1.ConditionGitOpsSynced, r.installGitOps},
@@ -89,7 +93,12 @@ func (r *AIGridReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				// Retryable object-state races: back off briefly.
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, r.updateStatus(ctx, grid)
 			}
-			return ctrl.Result{}, r.updateStatus(ctx, grid)
+			// Report the failure in status, then return the error so
+			// controller-runtime requeues with backoff.
+			if statusErr := r.updateStatus(ctx, grid); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
+			return ctrl.Result{}, err
 		}
 		if !done {
 			setGridCondition(grid, step.condition, metav1.ConditionFalse, "InProgress", "phase in progress")

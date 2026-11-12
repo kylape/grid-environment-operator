@@ -15,7 +15,7 @@ spec:
   gitOps:
     repo: https://github.com/kylape/ai-grid-cluster-gitops
     revision: hub-onboarding-sno-20261105
-    path: charts/rhai-on-openshift
+    path: bootstrap/dedicated-hub
   pullSecretRef:
     name: rhai-pull-secret
   duration: 72h

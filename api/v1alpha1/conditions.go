@@ -6,6 +6,11 @@ const (
 	// ConditionProvisioned: all LWEs (sites + zone server) exist and are Ready.
 	ConditionProvisioned = "Provisioned"
 
+	// ConditionHubBootstrapped: the hub's GitOps operator is running, the
+	// root Application points at the grid's repo, and the fan-out has
+	// installed ACM (ManagedCluster CRD established).
+	ConditionHubBootstrapped = "HubBootstrapped"
+
 	// ConditionImported: all spoke sites are joined to the hub's ACM.
 	ConditionImported = "Imported"
 

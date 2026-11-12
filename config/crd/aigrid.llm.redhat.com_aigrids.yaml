@@ -66,8 +66,10 @@ spec:
                   from.
                 properties:
                   path:
-                    description: Path is the path within the repository for the root
-                      Application.
+                    description: |-
+                      Path is the bootstrap directory within the repository containing
+                      the root ApplicationSet (the fan-out that installs everything,
+                      ACM included). Defaults to bootstrap/dedicated-hub.
                     type: string
                   repo:
                     description: Repo is the Git repository URL.

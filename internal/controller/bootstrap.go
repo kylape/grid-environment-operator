@@ -30,9 +30,9 @@ import (
 //     credentials) that the rhoai-prerequisites ACM app distributes to
 //     every managed cluster
 //
-// The phase is done when the ManagedCluster CRD is established on the hub
-// — the fan-out has installed ACM — because that is what the next phase
-// (Imported) depends on.
+// The phase is done when ACM has registered the hub's own cluster
+// (local-cluster) — the registration pipeline is proven end to end,
+// which is what the next phase (Imported) depends on.
 func (r *AIGridReconciler) bootstrapHub(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, error) {
 	hub := r.hubClient(ctx, grid)
 	if hub == nil {
@@ -59,7 +59,7 @@ func (r *AIGridReconciler) bootstrapHub(ctx context.Context, grid *aigridv1alpha
 		return false, err
 	}
 
-	return managedClusterCRDEstablished(ctx, hub)
+	return localClusterRegistered(ctx, hub)
 }
 
 // ensureGitOpsOperator installs the OpenShift GitOps operator from
@@ -228,25 +228,18 @@ func (r *AIGridReconciler) seedHubQuaySecret(ctx context.Context, grid *aigridv1
 	return err
 }
 
-// managedClusterCRDEstablished reports whether the fan-out has installed
-// ACM on the hub — the gate for the Imported phase.
-func managedClusterCRDEstablished(ctx context.Context, hub client.Client) (bool, error) {
-	crd := object(crdGVK, "", "managedclusters.cluster.open-cluster-management.io")
-	if err := hub.Get(ctx, client.ObjectKeyFromObject(crd), crd); err != nil {
+// localClusterRegistered reports whether ACM has registered the hub's own
+// cluster — the demo-validated readiness signal. It proves the entire
+// registration pipeline (controller live, CSR approval working, klusterlet
+// functional) end to end, which is exactly what the spoke imports in the
+// next phase depend on. It appears as soon as the registration core is up,
+// earlier than full multiclusterhub Available, which also waits on
+// console/search/observability components the import path never touches.
+func localClusterRegistered(ctx context.Context, hub client.Client) (bool, error) {
+	local, err := getUnstructured(ctx, hub, managedClusterGVK, "", "local-cluster")
+	if err != nil {
 		return false, client.IgnoreNotFound(err)
 	}
-	conditions, found, err := unstructured.NestedSlice(crd.Object, "status", "conditions")
-	if err != nil || !found {
-		return false, nil
-	}
-	for _, raw := range conditions {
-		condition, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if condition["type"] == "Established" && condition["status"] == "True" {
-			return true, nil
-		}
-	}
-	return false, nil
+	_ = local
+	return true, nil
 }

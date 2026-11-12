@@ -64,7 +64,10 @@ func (r *AIGridReconciler) importSites(ctx context.Context, grid *aigridv1alpha1
 				labels[gridLabel] = grid.Name
 				labels[peerGroupLabel] = peerGroup(grid)
 				mc.SetLabels(labels)
-				return nil
+				// Accept the cluster on creation: without it the spoke's
+				// CSR is never approved and the join hangs unless ACM's
+				// auto-accept is enabled.
+				return unstructured.SetNestedField(mc.Object, true, "spec", "hubAcceptsClient")
 			}); err != nil {
 				return false, err
 			}

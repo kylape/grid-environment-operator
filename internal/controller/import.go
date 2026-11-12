@@ -1,0 +1,140 @@
+package controller
+
+import (
+	"context"
+	"fmt"
+
+	aigridv1alpha1 "github.com/kylape/grid-environment-operator/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/yaml"
+)
+
+// managedClusterRoleLabel is the label the GitOps fan-out reads to decide
+// which charts land on which spoke. Its key is fixed by the grid charts.
+const managedClusterRoleLabel = "ai-grid/role"
+
+// importSites is the Importing phase: register every spoke with the hub's
+// ACM and wait for the joins.
+//
+// Recreating a site LWE under the same name requires deleting the hub-side
+// ManagedCluster first: the import flow trusts persisted join state that
+// does not survive guest re-creation, leaving the new guest agentless while
+// the hub believes it joined. Stale clusters are detected by the absence of
+// the klusterlet namespace on the guest.
+func (r *AIGridReconciler) importSites(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, error) {
+	hub := r.hubClient(ctx, grid)
+	if hub == nil {
+		return false, nil
+	}
+
+	allJoined := true
+	for _, site := range spokeSites(grid) {
+		name := SiteName(grid, site)
+
+		guest, err := r.siteKubeconfig(ctx, grid, name)
+		if err != nil {
+			return false, err
+		}
+
+		mc, err := getUnstructured(ctx, hub, managedClusterGVK, "", name)
+		if err != nil {
+			if !apierrors.IsNotFound(err) {
+				return false, err
+			}
+			mc = nil
+		}
+
+		if mc != nil && !r.guestHasKlusterlet(ctx, guest) {
+			// Stale registration from a destroyed guest: remove it so the
+			// fresh import below runs.
+			if err := deleteUnstructured(ctx, hub, managedClusterGVK, "", name); err != nil {
+				return false, err
+			}
+			mc = nil
+		}
+
+		if mc == nil {
+			mc = object(managedClusterGVK, "", name)
+			if _, err := controllerutil.CreateOrUpdate(ctx, hub, mc, func() error {
+				labels := objectMetaLabels(mc)
+				labels[gridLabel] = grid.Name
+				labels[peerGroupLabel] = peerGroup(grid)
+				mc.SetLabels(labels)
+				return nil
+			}); err != nil {
+				return false, err
+			}
+		}
+
+		if !managedClusterJoined(mc) {
+			allJoined = false
+			if err := r.applyImportDocuments(ctx, hub, guest, name); err != nil {
+				return false, err
+			}
+		}
+	}
+	return allJoined, nil
+}
+
+// guestHasKlusterlet checks whether the ACM agent namespace exists on the
+// guest — the cheapest reliable marker that the agent is installed.
+func (r *AIGridReconciler) guestHasKlusterlet(ctx context.Context, guest client.Client) bool {
+	namespace := &corev1.Namespace{}
+	if err := guest.Get(ctx, client.ObjectKey{Name: klusterletNamespace}, namespace); err != nil {
+		return false
+	}
+	return true
+}
+
+// applyImportDocuments fetches the hub-generated import secret and applies
+// its manifests to the guest. The secret contains the klusterlet CRDs and
+// the import document; both are multi-document YAML.
+func (r *AIGridReconciler) applyImportDocuments(ctx context.Context, hub, guest client.Client, name string) error {
+	secret := &corev1.Secret{}
+	if err := hub.Get(ctx, client.ObjectKey{Namespace: name, Name: name + "-import"}, secret); err != nil {
+		// The hub generates the secret shortly after ManagedCluster
+		// creation; retry on the next reconcile.
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, key := range []string{"crds.yaml", "import.yaml"} {
+		raw, ok := secret.Data[key]
+		if !ok {
+			continue
+		}
+		for _, document := range splitYAMLDocuments(string(raw)) {
+			if err := applyDocument(ctx, guest, document); err != nil {
+				return fmt.Errorf("applying %s for %s: %w", key, name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// applyDocument creates or updates a single YAML document on a cluster.
+func applyDocument(ctx context.Context, c client.Client, document string) error {
+	var content map[string]interface{}
+	if err := yaml.Unmarshal([]byte(document), &content); err != nil {
+		return fmt.Errorf("parsing document: %w", err)
+	}
+	if content == nil {
+		return nil
+	}
+	object := &unstructured.Unstructured{Object: content}
+	if object.GetKind() == "" || object.GetAPIVersion() == "" {
+		return nil
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, c, object, func() error {
+		return nil
+	}); err != nil {
+		return fmt.Errorf("applying %s %s/%s: %w", object.GetKind(), object.GetNamespace(), object.GetName(), err)
+	}
+	return nil
+}

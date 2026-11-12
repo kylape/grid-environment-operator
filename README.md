@@ -26,6 +26,12 @@ run against a live cluster. Known review points:
   repo.
 * `SiteStatus.KubeconfigSecret` is declared but not populated; CI reads
   kubeconfigs from the LWEs' `status.kubeconfig` directly today.
+* The hub is deliberately **not** a Submariner participant (no gateway
+  node label, no `local-cluster` submariner labels): the grid's data plane
+  is spoke-to-spoke and hub communication rides ACM channels. The demo
+  had the hub labeled for submariner and observability, so the first live
+  run should watch for membership or metrics issues and add the labeling
+  if the simpler hypothesis is wrong.
 
 ## Layout
 

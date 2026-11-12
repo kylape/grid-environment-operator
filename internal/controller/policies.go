@@ -103,11 +103,15 @@ func interSiteUDPPolicy(peerNamespaces []string) *networkingv1.NetworkPolicy {
 	}
 }
 
-// zoneServerIngressPolicy admits DNS queries from every site's
-// virt-launchers to the zone server. It is applied in the DNS namespace.
-// Cross-namespace ingress requires the namespaceSelector + podSelector
-// combination; a bare podSelector is same-namespace only.
-func zoneServerIngressPolicy(peerNamespaces []string) *networkingv1.NetworkPolicy {
+// zoneServerIngressPolicy admits DNS queries to the zone server from any
+// source, on the DNS ports only. The server answers a handful of A records
+// and nothing else, so it is not sensitive — and restricting the source
+// would block the operator's own verification probe, which runs from the
+// operator pod (or a developer's devcontainer), not from the grid's
+// virt-launchers. The explicit policy also survives a future where
+// namespace-mode LWE namespaces gain default-deny policies; today they
+// carry none.
+func zoneServerIngressPolicy() *networkingv1.NetworkPolicy {
 	port5353 := intstr.FromInt32(5353)
 	port53 := intstr.FromInt32(53)
 
@@ -117,7 +121,6 @@ func zoneServerIngressPolicy(peerNamespaces []string) *networkingv1.NetworkPolic
 			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": zoneServerName}},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
-				From: namespacePodPeers(peerNamespaces),
 				Ports: []networkingv1.NetworkPolicyPort{
 					{Port: &port5353, Protocol: protoUDP()},
 					{Port: &port5353, Protocol: protoTCP()},
@@ -160,7 +163,7 @@ func (r *AIGridReconciler) applyPolicies(ctx context.Context, grid *aigridv1alph
 		}
 	}
 
-	zonePolicy := zoneServerIngressPolicy(siteNamespaces)
+	zonePolicy := zoneServerIngressPolicy()
 	zonePolicy.Namespace = dnsNamespace
 	return r.applyPolicy(ctx, zonePolicy)
 }

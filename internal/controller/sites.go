@@ -15,6 +15,14 @@ import (
 // provision ensures the zone-server LWE (namespace mode) and one HyperShift
 // LWE per site, then waits for all of them to become Ready.
 func (r *AIGridReconciler) provision(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, error) {
+	// Fail fast on a bad pull secret: both demo incidents (missing
+	// path-scoped key; replaced instead of merged composition) would have
+	// been caught here before any LWE existed. Retried on the phase cadence
+	// so fixing the secret self-heals.
+	if err := r.validatePullSecret(ctx, grid); err != nil {
+		return false, err
+	}
+
 	desired := map[string]bool{}
 	for _, site := range grid.Spec.Sites {
 		desired[SiteName(grid, site)] = true

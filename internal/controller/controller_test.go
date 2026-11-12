@@ -185,3 +185,57 @@ func TestRouterOverrideZone(t *testing.T) {
 		t.Errorf("RouterOverrideZone = %q", got)
 	}
 }
+
+func TestMissingPullSecretKeys(t *testing.T) {
+	// The validated composition: every required key present.
+	complete := &dockerConfig{Auths: map[string]struct {
+		Auth string `json:"auth"`
+	}{
+		"cloud.openshift.com":         {},
+		"quay.io":                     {},
+		"quay.io/rhoai":               {},
+		"registry.redhat.io":          {},
+		"registry.connect.redhat.com": {},
+		"registry.stage.redhat.io":    {},
+	}}
+	if missing := missingPullSecretKeys(complete, requiredPullSecretKeys); len(missing) != 0 {
+		t.Errorf("complete composition reported missing keys: %v", missing)
+	}
+
+	// The first corruption incident: path-scoped key dropped, everything
+	// else intact. This must fail — no single token covers both quay
+	// repositories.
+	dropped := &dockerConfig{Auths: map[string]struct {
+		Auth string `json:"auth"`
+	}{
+		"cloud.openshift.com": {},
+		"quay.io":             {},
+		"registry.redhat.io":  {},
+	}}
+	missing := missingPullSecretKeys(dropped, requiredPullSecretKeys)
+	if len(missing) != 1 || missing[0] != "quay.io/rhoai" {
+		t.Errorf("expected [quay.io/rhoai] missing, got %v", missing)
+	}
+
+	// Optional keys absent: not an error.
+	if missing := missingPullSecretKeys(dropped, optionalPullSecretKeys); len(missing) == 0 {
+		t.Error("sanity: optional keys should be reported missing when absent")
+	}
+}
+
+func TestParseDockerConfigRejectsGarbage(t *testing.T) {
+	if _, err := parseDockerConfig([]byte("not json")); err == nil {
+		t.Error("garbage should fail to parse")
+	}
+	if _, err := parseDockerConfig([]byte(`{}`)); err == nil {
+		t.Error("config without auths should fail")
+	}
+	valid := `{"auths":{"quay.io":{"auth":"dXNlcjpwYXNz"}}}`
+	config, err := parseDockerConfig([]byte(valid))
+	if err != nil {
+		t.Fatalf("valid config failed to parse: %v", err)
+	}
+	if _, ok := config.Auths["quay.io"]; !ok {
+		t.Error("quay.io key not parsed")
+	}
+}

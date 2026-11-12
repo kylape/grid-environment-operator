@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -76,6 +77,13 @@ func (r *AIGridReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		done, err := step.run(ctx, grid)
 		if err != nil {
 			logger.Error(err, "phase failed", "condition", step.condition)
+			// Pull-secret failures report their own reason and retry on
+			// the phase cadence: fixing the secret self-heals the grid.
+			var secretErr *pullSecretError
+			if errors.As(err, &secretErr) {
+				setGridCondition(grid, step.condition, metav1.ConditionFalse, secretErr.reason, secretErr.message)
+				return ctrl.Result{RequeueAfter: phaseWait}, r.updateStatus(ctx, grid)
+			}
 			setGridCondition(grid, step.condition, metav1.ConditionFalse, "PhaseError", err.Error())
 			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
 				// Retryable object-state races: back off briefly.

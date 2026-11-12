@@ -10,7 +10,7 @@ test:
 # API types or rbac markers.
 generate:
 	go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.19.0 object paths=./api/...
-	go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.19.0 crd rbac:roleName=manager-role paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
+	go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.19.0 crd rbac:roleName=grid-environment-operator paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
 
 manifests: generate
 

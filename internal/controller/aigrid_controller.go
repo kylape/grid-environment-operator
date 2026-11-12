@@ -17,16 +17,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// AIGridReconciler reconciles AIGrid objects.
-// +kubebuilder:rbac:groups=aigrid.llm.redhat.com,resources=aigrids,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=aigrid.llm.redhat.com,resources=aigrids/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=aigrid.llm.redhat.com,resources=aigrids/finalizers,verbs=update
-// +kubebuilder:rbac:groups=llm.redhat.com,resources=llmworkloadenvironments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=configmaps;services,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
+// AIGridReconciler reconciles AIGrid objects. Host-cluster RBAC markers
+// live in doc.go at the package level; see that file for why.
 type AIGridReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme

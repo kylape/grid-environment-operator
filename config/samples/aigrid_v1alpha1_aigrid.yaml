@@ -2,7 +2,6 @@ apiVersion: aigrid.llm.redhat.com/v1alpha1
 kind: AIGrid
 metadata:
   name: ci-grid
-  namespace: grid-environment-operator
 spec:
   sites:
   - role: hub

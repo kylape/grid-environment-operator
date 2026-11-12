@@ -58,21 +58,25 @@ make test      # unit tests (zone records, DNS merge, policy shapes)
 make generate  # regenerate deepcopy + CRD + RBAC after API changes
 ```
 
-## Running without cluster-admin
+## Dev sequence
 
-The operator's service account is a hard prerequisite — it never runs with
-admin credentials:
+The operator never runs as cluster-admin. One script does all admin-touching
+setup (CRD, service account, generated role, binding, token minting) and
+leaves a scoped kubeconfig at `.dev-kubeconfig` for everything else:
 
 ```sh
-# once, with an admin kubeconfig: namespace, service account, generated
-# ClusterRole, and binding
-kubectl apply -f config/rbac/ --kubeconfig <admin-kubeconfig>
+# once per cluster, and after any CRD or RBAC change (admin used only here)
+tools/dev-setup.sh /opt/admin
 
-# mint a scoped kubeconfig for devcontainer runs (admin is used only to
-# mint the token, never to run the operator)
-tools/dev-kubeconfig.sh <admin-kubeconfig> > /tmp/aigrid-dev.kubeconfig
-KUBECONFIG=/tmp/aigrid-dev.kubeconfig go run ./cmd/manager
+# the entire dev loop runs on the minted identity
+KUBECONFIG=.dev-kubeconfig go run ./cmd/manager
+KUBECONFIG=.dev-kubeconfig kubectl -n klape-dev apply -f config/samples/
 ```
+
+The AIGrid goes in a namespace that holds the validated pull secret
+(`klape-dev` on pirate). The setup script sanity-checks the minted identity
+with `auth can-i` against the permissions reconciliation actually needs, so
+RBAC mistakes surface at setup rather than mid-reconcile.
 
 Note on RBAC generation: the `+kubebuilder:rbac` markers live in
 `internal/controller/doc.go` at the package level, because controller-gen

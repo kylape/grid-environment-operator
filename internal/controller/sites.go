@@ -83,20 +83,30 @@ func (r *AIGridReconciler) provision(ctx context.Context, grid *aigridv1alpha1.A
 			if found && existingSize != "" && existingSize != desiredSize {
 				return fmt.Errorf("site %s: size %q cannot be changed to %q on an existing LWE; remove and re-add the site instead", name, existingSize, desiredSize)
 			}
-			if err := unstructured.SetNestedMap(siteLwe.Object, map[string]interface{}{
+			// Registry mirrors are platform facts, not grid policy:
+			// pre-release rhoai/rhaii images exist only on their
+			// mirrors, and the LWE platform forbids guests from
+			// creating IDMS objects directly (ValidatingAdmissionPolicy
+			// "mirror") — the HostedCluster, configured through this
+			// field, is the only sanctioned path (found live: without
+			// it, the ACM mirror distribution goes NonCompliant and
+			// every RHOAI bundle unpack fails its deadline).
+			// Hub sites are excluded — they run no RHOAI workloads, and
+			// mirrors on a hub roll its nodes (found live: a rolled hub
+			// node stranded ArgoCD on insufficient CPU for over an
+			// hour). A hub created before this exclusion keeps its
+			// mirrors: removing them would roll its nodes again.
+			hypershift := map[string]interface{}{
 				"size":       desiredSize,
 				"replicas":   int64(defaultInt32(site.Replicas, 1)),
 				"pullSecret": map[string]interface{}{"name": grid.Spec.PullSecretRef.Name},
-				// Registry mirrors are platform facts, not grid policy:
-				// pre-release rhoai/rhaii images exist only on their
-				// mirrors, and the LWE platform forbids guests from
-				// creating IDMS objects directly (ValidatingAdmissionPolicy
-				// "mirror") — the HostedCluster, configured through this
-				// field, is the only sanctioned path (found live: without
-				// it, the ACM mirror distribution goes NonCompliant and
-				// every RHOAI bundle unpack fails its deadline).
-				"imageDigestMirrorSet": imageDigestMirrorSet(),
-			}, "spec", "hypershift"); err != nil {
+			}
+			if site.Role != aigridv1alpha1.SiteRoleHub {
+				hypershift["imageDigestMirrorSet"] = imageDigestMirrorSet()
+			} else if existing, found, _ := unstructured.NestedMap(siteLwe.Object, "spec", "hypershift", "imageDigestMirrorSet"); found && len(existing) > 0 {
+				hypershift["imageDigestMirrorSet"] = existing
+			}
+			if err := unstructured.SetNestedMap(siteLwe.Object, hypershift, "spec", "hypershift"); err != nil {
 				return err
 			}
 			return applyClusterQueue(siteLwe, grid)

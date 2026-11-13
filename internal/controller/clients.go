@@ -64,6 +64,8 @@ var (
 
 	networkGVK = schema.GroupVersionKind{Group: "config.openshift.io", Version: "v1", Kind: "Network"}
 
+	managedClusterAddOnGVK = schema.GroupVersionKind{Group: "addon.open-cluster-management.io", Version: "v1beta1", Kind: "ManagedClusterAddOn"}
+
 	subscriptionGVK = schema.GroupVersionKind{Group: "operators.coreos.com", Version: "v1alpha1", Kind: "Subscription"}
 
 	gridSiteGVK = schema.GroupVersionKind{Group: "grid.praxis.fast", Version: "v1alpha1", Kind: "GridSite"}

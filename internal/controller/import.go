@@ -147,6 +147,23 @@ func (r *AIGridReconciler) importSites(ctx context.Context, grid *aigridv1alpha1
 				return false, err
 			}
 		}
+
+		// The application-manager addon's install strategy is Manual: the
+		// per-cluster ManagedClusterAddOn must be created by the importer,
+		// exactly as the repo's import script does. Without it the addon
+		// never deploys, its cluster secret never reaches the hub, and the
+		// argo-registration GitOpsCluster cannot register the spoke with
+		// Argo — so the fan-out generates no spoke applications and the
+		// grid silently stalls (found live).
+		addon := object(managedClusterAddOnGVK, name, "application-manager")
+		if _, err := controllerutil.CreateOrUpdate(ctx, hub, addon, func() error {
+			if err := unstructured.SetNestedMap(addon.Object, map[string]interface{}{}, "spec"); err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
+			return false, err
+		}
 	}
 	return allJoined, nil
 }

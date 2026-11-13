@@ -58,19 +58,19 @@ func (r *AIGridReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// GitOpsSynced is a possible future optimization, not implemented.
 	steps := []struct {
 		condition string
-		run       func(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, error)
+		run       func(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, string, error)
 	}{
-		{aigridv1alpha1.ConditionProvisioned, r.provision},
-		{aigridv1alpha1.ConditionHubBootstrapped, r.bootstrapHub},
-		{aigridv1alpha1.ConditionImported, r.importSites},
-		{aigridv1alpha1.ConditionWired, r.wire},
+		{aigridv1alpha1.ConditionProvisioned, phaseDetail(r.provision)},
+		{aigridv1alpha1.ConditionHubBootstrapped, phaseDetail(r.bootstrapHub)},
+		{aigridv1alpha1.ConditionImported, phaseDetail(r.importSites)},
+		{aigridv1alpha1.ConditionWired, phaseDetail(r.wire)},
 		{aigridv1alpha1.ConditionGitOpsSynced, r.installGitOps},
-		{aigridv1alpha1.ConditionGridReady, r.awaitGrid},
+		{aigridv1alpha1.ConditionGridReady, phaseDetail(r.awaitGrid)},
 	}
 
 	requeue := false
 	for _, step := range steps {
-		done, err := step.run(ctx, grid)
+		done, detail, err := step.run(ctx, grid)
 		if err != nil {
 			logger.Error(err, "phase failed", "condition", step.condition)
 			// Pull-secret failures report their own reason and retry on
@@ -94,7 +94,9 @@ func (r *AIGridReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		if !done {
 			message := "phase in progress"
-			if blocking := blockingSiteMessage(grid); blocking != "" {
+			if detail != "" {
+				message = detail
+			} else if blocking := blockingSiteMessage(grid); blocking != "" {
 				message = blocking
 			}
 			setGridCondition(grid, step.condition, metav1.ConditionFalse, "InProgress", message)
@@ -202,6 +204,15 @@ func (r *AIGridReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 func siteNamespacedName(grid *aigridv1alpha1.AIGrid, site aigridv1alpha1.SiteSpec) types.NamespacedName {
 	return types.NamespacedName{Namespace: grid.Namespace, Name: SiteName(grid, site)}
+}
+
+// phaseDetail adapts a (bool, error) phase function to the message-carrying
+// shape used by the phase machine.
+func phaseDetail(run func(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, error)) func(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, string, error) {
+	return func(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, string, error) {
+		done, err := run(ctx, grid)
+		return done, "", err
+	}
 }
 
 var errNoHub = fmt.Errorf("no hub site in grid")

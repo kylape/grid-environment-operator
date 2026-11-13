@@ -48,6 +48,13 @@ func (r *AIGridReconciler) provision(ctx context.Context, grid *aigridv1alpha1.A
 	dnsLwe := object(lweGVK, grid.Namespace, DNSLweName(grid))
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dnsLwe, func() error {
 		setGridLabels(dnsLwe, grid, "")
+		// Controller ownership: deleting the AIGrid garbage-collects its
+		// LWEs (sites, zone server namespace, control planes, policies —
+		// everything downstream). Without this, teardown orphans the
+		// environments and a recreated grid adopts stale sites.
+		if err := controllerutil.SetControllerReference(grid, dnsLwe, r.Scheme); err != nil {
+			return err
+		}
 		if err := unstructured.SetNestedField(dnsLwe.Object, "Namespace", "spec", "mode"); err != nil {
 			return err
 		}
@@ -70,6 +77,9 @@ func (r *AIGridReconciler) provision(ctx context.Context, grid *aigridv1alpha1.A
 		desiredSize := defaultString(site.Size, "small")
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, siteLwe, func() error {
 			setGridLabels(siteLwe, grid, string(site.Role))
+			if err := controllerutil.SetControllerReference(grid, siteLwe, r.Scheme); err != nil {
+				return err
+			}
 			if err := unstructured.SetNestedField(siteLwe.Object, "HyperShift", "spec", "mode"); err != nil {
 				return err
 			}

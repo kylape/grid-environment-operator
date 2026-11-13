@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	aigridv1alpha1 "github.com/kylape/grid-environment-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -30,10 +31,10 @@ const gridNamespace = "redhat-ai-grid"
 //
 // This phase overlaps Wiring by design: the grid's connect checks retry,
 // so the grid can install while DNS wiring lands.
-func (r *AIGridReconciler) installGitOps(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, error) {
+func (r *AIGridReconciler) installGitOps(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, string, error) {
 	hub := r.hubClient(ctx, grid)
 	if hub == nil {
-		return false, nil
+		return false, "", nil
 	}
 
 	// Role labels on the spoke ManagedClusters: this is what the fan-out
@@ -50,7 +51,7 @@ func (r *AIGridReconciler) installGitOps(ctx context.Context, grid *aigridv1alph
 			mc.SetLabels(labels)
 			return nil
 		}); err != nil {
-			return false, err
+			return false, "", err
 		}
 	}
 
@@ -58,10 +59,10 @@ func (r *AIGridReconciler) installGitOps(ctx context.Context, grid *aigridv1alph
 	for _, site := range spokeSites(grid) {
 		guest, err := r.siteKubeconfig(ctx, grid, SiteName(grid, site))
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
 		if err := r.annotateOperatorGroups(ctx, guest); err != nil {
-			return false, err
+			return false, "", err
 		}
 	}
 
@@ -72,17 +73,76 @@ func (r *AIGridReconciler) installGitOps(ctx context.Context, grid *aigridv1alph
 	application, err := getUnstructured(ctx, hub, applicationGVK, gitOpsNamespace, grid.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return true, nil
+			return true, "", nil
 		}
-		return false, err
+		return false, "", err
 	}
 
 	// Readiness: the root Application reports Synced.
 	sync, found, err := unstructured.NestedString(application.Object, "status", "sync", "status")
 	if err != nil || !found {
-		return false, nil
+		return false, "", nil
 	}
-	return sync == "Synced", nil
+	// Surface failed fan-out syncs: a stuck Application (typically retries
+	// exhausted against a dependency that arrived late) must be visible in
+	// the AIGrid status rather than a silent hang. Attribution only —
+	// re-triggering syncs is deliberately not automated, because deleting
+	// an Application cascades to its resources, which is destructive for
+	// stateful apps.
+	blocker, err := r.fanOutSyncErrors(ctx, hub, grid)
+	if err != nil {
+		return false, "", err
+	}
+	if blocker != "" {
+		return false, blocker, nil
+	}
+	return sync == "Synced", "", nil
+}
+
+// fanOutSyncErrors lists the grid's fan-out Applications and reports any
+// whose last sync operation failed — typically retries exhausted against a
+// dependency that arrived late, like model manifests applied before the
+// serving CRD landed on the spoke.
+func (r *AIGridReconciler) fanOutSyncErrors(ctx context.Context, hub client.Client, grid *aigridv1alpha1.AIGrid) (string, error) {
+	apps, err := listUnstructured(ctx, hub, applicationGVK, gitOpsNamespace, nil)
+	if err != nil {
+		return "", err
+	}
+	var stuck []string
+	for _, app := range apps.Items {
+		name := app.GetName()
+		if name == grid.Name || !isGridFanOutApp(name, grid) {
+			continue
+		}
+		phase, found, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
+		if !found || (phase != "Failed" && phase != "Error") {
+			continue
+		}
+		message, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "message")
+		if len(message) > 160 {
+			message = message[:160] + "..."
+		}
+		stuck = append(stuck, fmt.Sprintf("%s: %s", name, message))
+	}
+	if len(stuck) == 0 {
+		return "", nil
+	}
+	return "application sync failed (needs re-sync): " + strings.Join(stuck, "; "), nil
+}
+
+// isGridFanOutApp matches Applications generated for this grid's spoke
+// sites: fan-out app names embed the site name (e.g.
+// rhoai-ci-grid-inference-c6f3cf84, acm-submariner-ci-grid-ingress).
+func isGridFanOutApp(name string, grid *aigridv1alpha1.AIGrid) bool {
+	for _, site := range grid.Status.Sites {
+		if site.Role == aigridv1alpha1.SiteRoleHub {
+			continue
+		}
+		if strings.Contains(name, "-"+site.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 // annotateOperatorGroups applies the bundle-unpack retry annotation to the

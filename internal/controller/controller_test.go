@@ -28,6 +28,13 @@ func TestBuildCorefileServesEverySite(t *testing.T) {
 			t.Errorf("Corefile missing %q:\n%s", expected, corefile)
 		}
 	}
+
+	// CoreDNS refuses duplicate zone definitions — with multiple sites,
+	// grid.internal must appear as exactly ONE server block. (Found live:
+	// per-site blocks crash-looped the zone server.)
+	if count := strings.Count(corefile, "grid.internal:5353"); count != 1 {
+		t.Errorf("grid.internal zone defined %d times, must be exactly 1:\n%s", count, corefile)
+	}
 }
 
 func TestBuildCorefileSkipsIncompleteRecords(t *testing.T) {

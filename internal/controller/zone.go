@@ -33,26 +33,31 @@ func RouterOverrideZone(record zoneRecord) string {
 	return "router-default." + record.AppsDomain
 }
 
-// buildCorefile renders the zone server's Corefile. Every site gets a
-// grid.internal block (its own and its peers' names) and a router-override
-// block. Names use short TTLs: passthrough ClusterIPs can change when
-// HyperShift recreates services.
+// buildCorefile renders the zone server's Corefile. grid.internal is a
+// SINGLE block containing every site's names — CoreDNS refuses duplicate
+// zone definitions, so per-site blocks crash-loop the server (found live).
+// Each router-override zone is unique per site and gets its own block.
+// Names use short TTLs: passthrough ClusterIPs can change when HyperShift
+// recreates services.
 func buildCorefile(records []zoneRecord) string {
 	var builder strings.Builder
-	for _, record := range records {
-		if record.PassthroughIP == "" || record.AppsDomain == "" {
-			continue
-		}
+
+	gridRecords := completeRecords(records)
+	if len(gridRecords) > 0 {
 		fmt.Fprintf(&builder, "grid.internal:5353 {\n")
 		fmt.Fprintf(&builder, "    hosts {\n")
-		fmt.Fprintf(&builder, "        %s %s.grid.internal\n", record.PassthroughIP, record.Site)
-		fmt.Fprintf(&builder, "        %s %s-signals.grid.internal\n", record.PassthroughIP, record.Site)
+		for _, record := range gridRecords {
+			fmt.Fprintf(&builder, "        %s %s.grid.internal\n", record.PassthroughIP, record.Site)
+			fmt.Fprintf(&builder, "        %s %s-signals.grid.internal\n", record.PassthroughIP, record.Site)
+		}
 		fmt.Fprintf(&builder, "        ttl 30\n")
 		fmt.Fprintf(&builder, "    }\n")
 		fmt.Fprintf(&builder, "    errors\n")
 		fmt.Fprintf(&builder, "    log\n")
 		fmt.Fprintf(&builder, "}\n")
+	}
 
+	for _, record := range gridRecords {
 		override := RouterOverrideZone(record)
 		fmt.Fprintf(&builder, "%s:5353 {\n", override)
 		fmt.Fprintf(&builder, "    hosts {\n")
@@ -66,6 +71,16 @@ func buildCorefile(records []zoneRecord) string {
 	return builder.String()
 }
 
+func completeRecords(records []zoneRecord) []zoneRecord {
+	var complete []zoneRecord
+	for _, record := range records {
+		if record.PassthroughIP != "" && record.AppsDomain != "" {
+			complete = append(complete, record)
+		}
+	}
+	return complete
+}
+
 // ensureZoneServer deploys (or updates) the per-grid CoreDNS zone server in
 // the DNS LWE's namespace and returns its service ClusterIP.
 //
@@ -74,7 +89,7 @@ func buildCorefile(records []zoneRecord) string {
 // unchanged. On every Corefile change the deployment is explicitly
 // restarted and the new config verified with a live query before success
 // is reported.
-func (r *AIGridReconciler) ensureZoneServer(ctx context.Context, grid *aigridv1alpha1.AIGrid, namespace string, records []zoneRecord) (string, error) {
+func (r *AIGridReconciler) ensureZoneServer(ctx context.Context, grid *aigridv1alpha1.AIGrid, namespace string, records []zoneRecord) (string, bool, error) {
 	corefile := buildCorefile(records)
 
 	configMap := &corev1.ConfigMap{
@@ -84,7 +99,7 @@ func (r *AIGridReconciler) ensureZoneServer(ctx context.Context, grid *aigridv1a
 		configMap.Data = map[string]string{"Corefile": corefile}
 		return nil
 	}); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	deployment := &appsv1.Deployment{
@@ -128,7 +143,7 @@ func (r *AIGridReconciler) ensureZoneServer(ctx context.Context, grid *aigridv1a
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	service := &corev1.Service{
@@ -146,11 +161,11 @@ func (r *AIGridReconciler) ensureZoneServer(ctx context.Context, grid *aigridv1a
 		}
 		return nil
 	}); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	if service.Spec.ClusterIP == "" || service.Spec.ClusterIP == "None" {
-		return "", fmt.Errorf("zone server service has no ClusterIP yet")
+		return "", false, fmt.Errorf("zone server service has no ClusterIP yet")
 	}
 
 	// Config changed since the running pods started: restart them. The
@@ -166,11 +181,31 @@ func (r *AIGridReconciler) ensureZoneServer(ctx context.Context, grid *aigridv1a
 			"aigrid.llm.redhat.com/corefile-restart": corefileHash(corefile),
 		}
 		if err := r.Patch(ctx, deployment, patch); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 
-	return service.Spec.ClusterIP, nil
+	// Wait for the rollout before declaring the phase done: a config
+	// restart may have just replaced the pods, and probing before they
+	// listen produces connection-refused errors that are really just
+	// "not ready yet".
+	zoneServer := &appsv1.Deployment{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(deployment), zoneServer); err != nil {
+		return "", false, err
+	}
+
+	return service.Spec.ClusterIP, deploymentAvailable(zoneServer), nil
+}
+
+// deploymentAvailable reports whether the deployment has an Available
+// condition.
+func deploymentAvailable(deployment *appsv1.Deployment) bool {
+	for _, condition := range deployment.Status.Conditions {
+		if condition.Type == appsv1.DeploymentAvailable && condition.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 // probeZone queries the zone server directly and verifies every record

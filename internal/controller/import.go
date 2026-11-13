@@ -121,7 +121,12 @@ func (r *AIGridReconciler) applyImportDocuments(ctx context.Context, hub, guest 
 	return nil
 }
 
-// applyDocument creates or updates a single YAML document on a cluster.
+// applyDocument applies a single YAML document to a cluster using
+// server-side apply. Documents are re-applied on every reconcile because
+// the credentials inside them rotate hub-side: a create-only apply leaves
+// agents running stale tokens forever. (Found live: the hub rotated the
+// klusterlet's bootstrap credential after the initial apply, and the join
+// hung silently on HTTP 401 until the secret was refreshed.)
 func applyDocument(ctx context.Context, c client.Client, document string) error {
 	var content map[string]interface{}
 	if err := yaml.Unmarshal([]byte(document), &content); err != nil {
@@ -130,14 +135,14 @@ func applyDocument(ctx context.Context, c client.Client, document string) error 
 	if content == nil {
 		return nil
 	}
-	object := &unstructured.Unstructured{Object: content}
-	if object.GetKind() == "" || object.GetAPIVersion() == "" {
+	documentObject := &unstructured.Unstructured{Object: content}
+	if documentObject.GetKind() == "" || documentObject.GetAPIVersion() == "" {
 		return nil
 	}
-	if _, err := controllerutil.CreateOrUpdate(ctx, c, object, func() error {
-		return nil
-	}); err != nil {
-		return fmt.Errorf("applying %s %s/%s: %w", object.GetKind(), object.GetNamespace(), object.GetName(), err)
+	if err := c.Patch(ctx, documentObject, client.Apply, client.ForceOwnership,
+		client.FieldOwner("aigrid.llm.redhat.com/import")); err != nil {
+		return fmt.Errorf("applying %s %s/%s: %w",
+			documentObject.GetKind(), documentObject.GetNamespace(), documentObject.GetName(), err)
 	}
 	return nil
 }

@@ -184,10 +184,17 @@ func (r *AIGridReconciler) wire(ctx context.Context, grid *aigridv1alpha1.AIGrid
 		records = append(records, record)
 	}
 
-	// Deploy (or update) the zone server and capture its service IP.
-	zoneServiceIP, err := r.ensureZoneServer(ctx, grid, dnsNamespace, records)
+	// Deploy (or update) the zone server and capture its service IP. If
+	// the rollout is still in flight (a config restart just replaced the
+	// pods), wait for the next reconcile before configuring guests —
+	// there is no point pointing forward zones at a server that is not
+	// answering yet.
+	zoneServiceIP, available, err := r.ensureZoneServer(ctx, grid, dnsNamespace, records)
 	if err != nil {
 		return false, err
+	}
+	if !available {
+		return false, nil
 	}
 
 	// Apply the host-side policies in every site's control-plane namespace.

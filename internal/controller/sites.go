@@ -87,6 +87,15 @@ func (r *AIGridReconciler) provision(ctx context.Context, grid *aigridv1alpha1.A
 				"size":       desiredSize,
 				"replicas":   int64(defaultInt32(site.Replicas, 1)),
 				"pullSecret": map[string]interface{}{"name": grid.Spec.PullSecretRef.Name},
+				// Registry mirrors are platform facts, not grid policy:
+				// pre-release rhoai/rhaii images exist only on their
+				// mirrors, and the LWE platform forbids guests from
+				// creating IDMS objects directly (ValidatingAdmissionPolicy
+				// "mirror") — the HostedCluster, configured through this
+				// field, is the only sanctioned path (found live: without
+				// it, the ACM mirror distribution goes NonCompliant and
+				// every RHOAI bundle unpack fails its deadline).
+				"imageDigestMirrorSet": imageDigestMirrorSet(),
 			}, "spec", "hypershift"); err != nil {
 				return err
 			}
@@ -280,6 +289,30 @@ func defaultInt32(value, fallback int32) int32 {
 		return value
 	}
 	return fallback
+}
+
+// imageDigestMirrorSet mirrors pre-release registries to where the images
+// actually exist, matching the validated demo configuration exactly.
+func imageDigestMirrorSet() map[string]interface{} {
+	mirror := func(source string, mirrors ...string) map[string]interface{} {
+		list := make([]interface{}, len(mirrors))
+		for i, m := range mirrors {
+			list[i] = m
+		}
+		return map[string]interface{}{
+			"source":             source,
+			"mirrors":            list,
+			"mirrorSourcePolicy": "NeverContactSource",
+		}
+	}
+	return map[string]interface{}{
+		"imageDigestMirrors": []interface{}{
+			mirror("registry.redhat.io/rhoai", "quay.io/rhoai"),
+			mirror("registry.redhat.io/rhaii", "registry.stage.redhat.io/rhaii"),
+			mirror("registry.redhat.io/rhaii-early-access", "registry.stage.redhat.io/rhaii-early-access"),
+			mirror("registry.redhat.io/rhaii-fast", "registry.stage.redhat.io/rhaii-fast"),
+		},
+	}
 }
 
 // applyClusterQueue sets the optional per-grid Kueue ClusterQueue on an

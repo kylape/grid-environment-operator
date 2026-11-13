@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grid-environment-operator
+  namespace: grid-environment-operator
+  labels:
+    app: grid-environment-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grid-environment-operator
+  template:
+    metadata:
+      labels:
+        app: grid-environment-operator
+    spec:
+      serviceAccountName: grid-environment-operator
+      containers:
+        - name: manager
+          image: quay.io/klape/grid-environment-operator:latest
+          args:
+            - --leader-elect
+            - --metrics-bind-address=:8443
+            - --health-probe-bind-address=:8081
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi

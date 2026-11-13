@@ -145,6 +145,28 @@ func isGridFanOutApp(name string, grid *aigridv1alpha1.AIGrid) bool {
 	return false
 }
 
+// ingressCertificate returns a leaf certificate (and key) for the
+// endpoint host, signed by the CA referenced in spec.ingressTLS. Returns
+// nils when the certificate already on the route is still valid — so
+// reconciles do not rewrite the route every pass. Re-issues when the
+// certificate is missing, does not cover the host, or is inside the
+// renewal margin.
+func (r *AIGridReconciler) ingressCertificate(ctx context.Context, grid *aigridv1alpha1.AIGrid, route *unstructured.Unstructured, host string) ([]byte, []byte, error) {
+	if existing, found, _ := unstructured.NestedString(route.Object, "spec", "tls", "certificate"); found && ingressLeafValid([]byte(existing), host) {
+		return nil, nil, nil
+	}
+
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: grid.Namespace, Name: grid.Spec.IngressTLS.CASecretRef.Name}, secret); err != nil {
+		return nil, nil, fmt.Errorf("reading ingress CA secret: %w", err)
+	}
+	ca, err := parseIngressCA(secret.Data["ca.crt"], secret.Data["ca.key"])
+	if err != nil {
+		return nil, nil, fmt.Errorf("ingress CA secret %s: %w", secret.Name, err)
+	}
+	return ca.signIngressLeaf(host)
+}
+
 // guestServiceCA reads the service-serving CA the guest signs its
 // in-cluster service certificates with — the reencrypt route's backend
 // CA.
@@ -250,11 +272,11 @@ func (r *AIGridReconciler) awaitGrid(ctx context.Context, grid *aigridv1alpha1.A
 
 		host := "grid-" + grid.Name + "." + site.AppsDomain
 		// The route is reencrypt rather than passthrough: the guest router
-		// terminates TLS with its ingress certificate, whose wildcard
-		// covers the route host, and re-encrypts to the gateway using the
-		// service CA. Passthrough would present the gateway's service
-		// certificate, whose SAN is the in-cluster service name — a
-		// hostname mismatch for every browser (found live).
+		// terminates TLS and re-encrypts to the gateway using the service
+		// CA. The terminating certificate is either the guest router's
+		// own (clients trust each grid's cluster CA), or — when the spec
+		// references one — a leaf signed with the grid's configured CA,
+		// so clients trust that CA once for every grid.
 		serviceCA, err := guestServiceCA(ctx, guest)
 		if err != nil {
 			return false, err
@@ -264,11 +286,22 @@ func (r *AIGridReconciler) awaitGrid(ctx context.Context, grid *aigridv1alpha1.A
 			if err := unstructured.SetNestedField(route.Object, host, "spec", "host"); err != nil {
 				return err
 			}
-			if err := unstructured.SetNestedMap(route.Object, map[string]interface{}{
+			tls := map[string]interface{}{
 				"termination":                   "Reencrypt",
 				"destinationCACertificate":      serviceCA,
 				"insecureEdgeTerminationPolicy": "Redirect",
-			}, "spec", "tls"); err != nil {
+			}
+			if grid.Spec.IngressTLS != nil {
+				certificatePEM, keyPEM, err := r.ingressCertificate(ctx, grid, route, host)
+				if err != nil {
+					return err
+				}
+				if certificatePEM != nil {
+					tls["certificate"] = string(certificatePEM)
+					tls["key"] = string(keyPEM)
+				}
+			}
+			if err := unstructured.SetNestedMap(route.Object, tls, "spec", "tls"); err != nil {
 				return err
 			}
 			return unstructured.SetNestedMap(route.Object, map[string]interface{}{

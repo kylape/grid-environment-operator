@@ -89,6 +89,35 @@ spec:
                 required:
                 - repo
                 type: object
+              ingressTLS:
+                description: |-
+                  IngressTLS optionally provides a CA that signs the ingress
+                  endpoint's certificate, so clients can trust the CA once and reach
+                  every grid's endpoint — instead of trusting each grid's cluster CA.
+                  When unset, the ingress site's own ingress certificate is served.
+                properties:
+                  caSecretRef:
+                    description: |-
+                      CASecretRef names a Secret in the AIGrid's namespace containing a
+                      CA certificate (key "ca.crt") and its private key (key "ca.key").
+                      The operator signs a leaf certificate for the endpoint host with
+                      this CA on each reconcile as needed. Use a dedicated lab CA: the
+                      operator must read the private key to sign.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                required:
+                - caSecretRef
+                type: object
               peerGroup:
                 description: |-
                   PeerGroup is the LWE peer-group label value applied to all LWEs.

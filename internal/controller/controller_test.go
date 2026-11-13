@@ -1,8 +1,16 @@
 package controller
 
 import (
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
+	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	aigridv1alpha1 "github.com/kylape/grid-environment-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -192,6 +200,88 @@ func TestRouterOverrideZone(t *testing.T) {
 	if got := RouterOverrideZone(record); got != "router-default.apps.example.com" {
 		t.Errorf("RouterOverrideZone = %q", got)
 	}
+}
+
+func TestIngressLeafSigning(t *testing.T) {
+	// Build a CA with an ECDSA key, as the feature expects.
+	caKey, err := ecdsaGenerateKey()
+	if err != nil {
+		t.Fatalf("generating CA key: %v", err)
+	}
+	caTemplate := x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-lab-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, caKey.Public(), caKey)
+	if err != nil {
+		t.Fatalf("creating CA: %v", err)
+	}
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	caKeyDER, _ := x509.MarshalPKCS8PrivateKey(caKey)
+	caKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: caKeyDER})
+
+	ca, err := parseIngressCA(caPEM, caKeyPEM)
+	if err != nil {
+		t.Fatalf("parsing CA: %v", err)
+	}
+
+	host := "grid-ci-grid.apps.cluster.example.com"
+	certificatePEM, keyPEM, err := ca.signIngressLeaf(host)
+	if err != nil {
+		t.Fatalf("signing leaf: %v", err)
+	}
+
+	// The leaf must cover the host and verify against the CA.
+	if !ingressLeafValid(certificatePEM, host) {
+		t.Error("freshly signed leaf must be valid for the host")
+	}
+	leafBlock, _ := pem.Decode(certificatePEM)
+	leaf, err := x509.ParseCertificate(leafBlock.Bytes)
+	if err != nil {
+		t.Fatalf("parsing signed leaf: %v", err)
+	}
+	caBlock, _ := pem.Decode(caPEM)
+	parsedCA, err := x509.ParseCertificate(caBlock.Bytes)
+	if err != nil {
+		t.Fatalf("parsing CA cert: %v", err)
+	}
+	if err := leaf.CheckSignatureFrom(parsedCA); err != nil {
+		t.Errorf("leaf does not chain to the CA: %v", err)
+	}
+
+	// The leaf's key must be usable.
+	keyBlock, _ := pem.Decode(keyPEM)
+	leafKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+	if err != nil {
+		t.Fatalf("parsing leaf key: %v", err)
+	}
+	if err := ecdsaChecker(leaf, leafKey); err != nil {
+		t.Errorf("leaf key does not match certificate: %v", err)
+	}
+
+	// Validity checks: wrong host and garbage are rejected.
+	if ingressLeafValid(certificatePEM, "other.example.com") {
+		t.Error("leaf must not validate for a different host")
+	}
+	if ingressLeafValid([]byte("not pem"), host) {
+		t.Error("garbage must not validate")
+	}
+}
+
+func ecdsaChecker(certificate *x509.Certificate, key interface{}) error {
+	ecdsaKey, ok := key.(*ecdsa.PrivateKey)
+	if !ok {
+		return fmt.Errorf("leaf key is not ECDSA")
+	}
+	if certificate.PublicKey.(*ecdsa.PublicKey).Equal(&ecdsaKey.PublicKey) {
+		return nil
+	}
+	return fmt.Errorf("public keys differ")
 }
 
 func TestMissingPullSecretKeys(t *testing.T) {

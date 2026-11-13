@@ -56,6 +56,17 @@ type GitOpsSpec struct {
 	Path string `json:"path,omitempty"`
 }
 
+// IngressTLSSpec references the CA used to sign the ingress endpoint's
+// certificate.
+type IngressTLSSpec struct {
+	// CASecretRef names a Secret in the AIGrid's namespace containing a
+	// CA certificate (key "ca.crt") and its private key (key "ca.key").
+	// The operator signs a leaf certificate for the endpoint host with
+	// this CA on each reconcile as needed. Use a dedicated lab CA: the
+	// operator must read the private key to sign.
+	CASecretRef corev1.LocalObjectReference `json:"caSecretRef"`
+}
+
 // AIGridSpec defines the desired state of an AIGrid.
 type AIGridSpec struct {
 	// Sites are the grid's sites. Exactly one hub, at least one inference,
@@ -88,6 +99,13 @@ type AIGridSpec struct {
 	// removing and re-adding the site.
 	// +optional
 	ClusterQueue string `json:"clusterQueue,omitempty"`
+
+	// IngressTLS optionally provides a CA that signs the ingress
+	// endpoint's certificate, so clients can trust the CA once and reach
+	// every grid's endpoint — instead of trusting each grid's cluster CA.
+	// When unset, the ingress site's own ingress certificate is served.
+	// +optional
+	IngressTLS *IngressTLSSpec `json:"ingressTLS,omitempty"`
 
 	// PeerGroup is the LWE peer-group label value applied to all LWEs.
 	// Defaults to the AIGrid's name.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	aigridv1alpha1 "github.com/kylape/grid-environment-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -51,7 +52,16 @@ func (r *AIGridReconciler) bootstrapHub(ctx context.Context, grid *aigridv1alpha
 		return false, err
 	}
 
-	if err := r.ensureRootApplication(ctx, hub, grid); err != nil {
+	if r.rootApplicationHandedOff(ctx, hub, grid) {
+		// The repo's ApplicationSet machinery is self-managing through its
+		// generated root app: our bootstrap root app is redundant and
+		// harmful — two Argo applications tracking one ApplicationSet
+		// fight over the tracking label, oscillating both apps' sync
+		// status forever (found live). Hand over and remove ours.
+		if err := deleteUnstructured(ctx, hub, applicationGVK, gitOpsNamespace, grid.Name); err != nil {
+			return false, err
+		}
+	} else if err := r.ensureRootApplication(ctx, hub, grid); err != nil {
 		return false, err
 	}
 
@@ -226,6 +236,45 @@ func (r *AIGridReconciler) seedHubQuaySecret(ctx context.Context, grid *aigridv1
 		return nil
 	})
 	return err
+}
+
+// rootApplicationHandedOff reports whether the repo's own ApplicationSet
+// machinery has taken over: any ApplicationSet in openshift-gitops whose
+// git generator points at the grid's repository. Once that exists, the
+// generated root application keeps it synced without our help.
+func (r *AIGridReconciler) rootApplicationHandedOff(ctx context.Context, hub client.Client, grid *aigridv1alpha1.AIGrid) bool {
+	sets, err := listUnstructured(ctx, hub, applicationSetGVK, gitOpsNamespace, nil)
+	if err != nil {
+		return false
+	}
+	repo := strings.TrimSuffix(grid.Spec.GitOps.Repo, ".git")
+	for _, set := range sets.Items {
+		generators, found, _ := unstructured.NestedSlice(set.Object, "spec", "generators")
+		if !found {
+			continue
+		}
+		for _, raw := range generators {
+			generator, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if git, found, _ := unstructured.NestedString(generator, "git", "repoURL"); found &&
+				strings.TrimSuffix(git, ".git") == repo {
+				return true
+			}
+			// Matrix generators nest their generators one level down.
+			nested, _, _ := unstructured.NestedSlice(generator, "matrix", "generators")
+			for _, rawNested := range nested {
+				if nestedGenerator, ok := rawNested.(map[string]interface{}); ok {
+					if git, found, _ := unstructured.NestedString(nestedGenerator, "git", "repoURL"); found &&
+						strings.TrimSuffix(git, ".git") == repo {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // localClusterRegistered reports whether ACM has registered the hub's own

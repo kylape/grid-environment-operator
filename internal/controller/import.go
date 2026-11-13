@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	aigridv1alpha1 "github.com/kylape/grid-environment-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -16,6 +17,48 @@ import (
 // managedClusterRoleLabel is the label the GitOps fan-out reads to decide
 // which charts land on which spoke. Its key is fixed by the grid charts.
 const managedClusterRoleLabel = "ai-grid/role"
+
+// managedClusterFanOutLabels are the labels the GitOps fan-out selects and
+// templates on, replicated from the validated demo chain:
+//
+//   - ai-grid/enabled gates every spoke placement — without it nothing
+//     installs, which is exactly how a grid silently stalls
+//   - ai-grid/submariner-private-network selects the KubeVirt networking
+//     mode (forceUDPEncaps, no NAT-T, one gateway) the topology requires
+//   - ai-grid/machine-network carries the host pod network peers arrive
+//     from, slashes replaced by underscores
+func (r *AIGridReconciler) managedClusterFanOutLabels(ctx context.Context) (map[string]string, error) {
+	cidr, err := r.hostPodNetworkCIDR(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"ai-grid/enabled":                    "true",
+		"ai-grid/submariner-private-network": "true",
+		"ai-grid/machine-network":            strings.ReplaceAll(cidr, "/", "_"),
+	}, nil
+}
+
+// hostPodNetworkCIDR reads the host cluster's pod network CIDR.
+func (r *AIGridReconciler) hostPodNetworkCIDR(ctx context.Context) (string, error) {
+	network := object(networkGVK, "", "cluster")
+	if err := r.Get(ctx, client.ObjectKeyFromObject(network), network); err != nil {
+		return "", fmt.Errorf("reading host network config: %w", err)
+	}
+	clusterNetwork, found, err := unstructured.NestedSlice(network.Object, "spec", "clusterNetwork")
+	if err != nil || !found || len(clusterNetwork) == 0 {
+		return "", fmt.Errorf("host network config has no clusterNetwork")
+	}
+	entry, ok := clusterNetwork[0].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("host network config clusterNetwork entry is malformed")
+	}
+	cidr, _ := entry["cidr"].(string)
+	if cidr == "" {
+		return "", fmt.Errorf("host network config clusterNetwork entry has no cidr")
+	}
+	return cidr, nil
+}
 
 // importSites is the Importing phase: register every spoke with the hub's
 // ACM and wait for the joins.
@@ -32,6 +75,10 @@ func (r *AIGridReconciler) importSites(ctx context.Context, grid *aigridv1alpha1
 	}
 
 	allJoined := true
+	fanOutLabels, err := r.managedClusterFanOutLabels(ctx)
+	if err != nil {
+		return false, err
+	}
 	for _, site := range spokeSites(grid) {
 		name := SiteName(grid, site)
 
@@ -63,6 +110,9 @@ func (r *AIGridReconciler) importSites(ctx context.Context, grid *aigridv1alpha1
 				labels := objectMetaLabels(mc)
 				labels[gridLabel] = grid.Name
 				labels[peerGroupLabel] = peerGroup(grid)
+				for key, value := range fanOutLabels {
+					labels[key] = value
+				}
 				mc.SetLabels(labels)
 				// Accept the cluster on creation: without it the spoke's
 				// CSR is never approved and the join hangs unless ACM's
@@ -70,6 +120,24 @@ func (r *AIGridReconciler) importSites(ctx context.Context, grid *aigridv1alpha1
 				return unstructured.SetNestedField(mc.Object, true, "spec", "hubAcceptsClient")
 			}); err != nil {
 				return false, err
+			}
+		} else {
+			// Existing ManagedCluster: reconcile the fan-out labels —
+			// grids created before a label was added, or labels lost
+			// hub-side, must not silently stall the fan-out.
+			updated := false
+			labels := objectMetaLabels(mc)
+			for key, value := range fanOutLabels {
+				if labels[key] != value {
+					labels[key] = value
+					updated = true
+				}
+			}
+			if updated {
+				mc.SetLabels(labels)
+				if err := hub.Update(ctx, mc); err != nil {
+					return false, err
+				}
 			}
 		}
 

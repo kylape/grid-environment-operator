@@ -60,6 +60,10 @@ var (
 
 	argocdGVK = schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "ArgoCD"}
 
+	applicationSetGVK = schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "ApplicationSet"}
+
+	networkGVK = schema.GroupVersionKind{Group: "config.openshift.io", Version: "v1", Kind: "Network"}
+
 	subscriptionGVK = schema.GroupVersionKind{Group: "operators.coreos.com", Version: "v1alpha1", Kind: "Subscription"}
 
 	gridSiteGVK = schema.GroupVersionKind{Group: "grid.praxis.fast", Version: "v1alpha1", Kind: "GridSite"}

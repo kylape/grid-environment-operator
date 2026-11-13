@@ -6,6 +6,7 @@ import (
 
 	aigridv1alpha1 "github.com/kylape/grid-environment-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -63,10 +64,15 @@ func (r *AIGridReconciler) installGitOps(ctx context.Context, grid *aigridv1alph
 	}
 
 	// The root Application was created by the HubBootstrapped phase; this
-	// phase waits for it to finish syncing the fan-out.
+	// phase waits for it to finish syncing the fan-out. Once handed off
+	// (deleted because the repo's own root Application took over), the
+	// installation is self-managing and this phase is done.
 	application, err := getUnstructured(ctx, hub, applicationGVK, gitOpsNamespace, grid.Name)
 	if err != nil {
-		return false, client.IgnoreNotFound(err)
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
 	}
 
 	// Readiness: the root Application reports Synced.

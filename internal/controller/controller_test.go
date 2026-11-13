@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	aigridv1alpha1 "github.com/kylape/grid-environment-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -237,5 +238,72 @@ func TestParseDockerConfigRejectsGarbage(t *testing.T) {
 	}
 	if _, ok := config.Auths["quay.io"]; !ok {
 		t.Error("quay.io key not parsed")
+	}
+}
+
+func lweWithReadyCondition(status, reason, message string) *unstructured.Unstructured {
+	lwe := object(lweGVK, "test", "test-lwe")
+	lwe.Object["status"] = map[string]interface{}{
+		"conditions": []interface{}{
+			map[string]interface{}{
+				"type": "Ready", "status": status, "reason": reason, "message": message,
+			},
+		},
+	}
+	return lwe
+}
+
+func TestLWEReadyCondition(t *testing.T) {
+	if _, _, ready := lweReadyCondition(lweWithReadyCondition("True", "Ready", "")); !ready {
+		t.Error("Ready=True should report ready")
+	}
+
+	reason, message, ready := lweReadyCondition(lweWithReadyCondition("False", "NamespaceCollision", "env-x exists"))
+	if ready {
+		t.Error("Ready=False should report not ready")
+	}
+	if reason != "NamespaceCollision" || message != "env-x exists" {
+		t.Errorf("reason/message not surfaced: %q / %q", reason, message)
+	}
+
+	reason, _, ready = lweReadyCondition(object(lweGVK, "test", "fresh"))
+	if ready {
+		t.Error("no status should report not ready")
+	}
+	if reason != "NoReadyCondition" {
+		t.Errorf("expected NoReadyCondition, got %q", reason)
+	}
+}
+
+func TestApplyClusterQueue(t *testing.T) {
+	grid := &aigridv1alpha1.AIGrid{Spec: aigridv1alpha1.AIGridSpec{ClusterQueue: "ci-grids"}}
+
+	// Fresh LWE: the queue is set.
+	fresh := object(lweGVK, "test", "fresh")
+	if err := applyClusterQueue(fresh, grid); err != nil {
+		t.Fatalf("fresh apply failed: %v", err)
+	}
+	if queue, _, _ := unstructured.NestedString(fresh.Object, "spec", "clusterQueue"); queue != "ci-grids" {
+		t.Errorf("queue not set: %q", queue)
+	}
+
+	// Existing LWE with the same queue: no error, no change.
+	if err := applyClusterQueue(fresh, grid); err != nil {
+		t.Fatalf("matching apply failed: %v", err)
+	}
+
+	// Existing LWE with a different queue: immutability error.
+	fresh.Object["spec"].(map[string]interface{})["clusterQueue"] = "other-queue"
+	if err := applyClusterQueue(fresh, grid); err == nil {
+		t.Error("queue change must be refused")
+	}
+
+	// No queue desired: never set, never an error.
+	unset := object(lweGVK, "test", "unset")
+	if err := applyClusterQueue(unset, &aigridv1alpha1.AIGrid{}); err != nil {
+		t.Fatalf("empty desired failed: %v", err)
+	}
+	if _, found, _ := unstructured.NestedString(unset.Object, "spec", "clusterQueue"); found {
+		t.Error("empty desired must not set a queue")
 	}
 }

@@ -178,22 +178,36 @@ func lweKubeconfig(lwe *unstructured.Unstructured) (string, error) {
 	return value, nil
 }
 
-// lweReady reads the LWE's Ready condition.
-func lweReady(lwe *unstructured.Unstructured) bool {
+// lweReadyCondition returns the LWE's Ready condition: its status, plus
+// the reason and message the LWE operator recorded for it. The reason is
+// surfaced into the AIGrid status so a stuck site explains itself.
+func lweReadyCondition(lwe *unstructured.Unstructured) (reason, message string, ready bool) {
 	conditions, found, err := unstructured.NestedSlice(lwe.Object, "status", "conditions")
 	if err != nil || !found {
-		return false
+		return "NoReadyCondition", "LWE has not reported a Ready condition yet", false
 	}
 	for _, raw := range conditions {
 		condition, ok := raw.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		if condition["type"] == "Ready" && condition["status"] == "True" {
-			return true
+		if condition["type"] == "Ready" {
+			status, _ := condition["status"].(string)
+			reason, _ := condition["reason"].(string)
+			message, _ := condition["message"].(string)
+			if status == "True" {
+				return reason, message, true
+			}
+			return defaultString(reason, "NotReady"), message, false
 		}
 	}
-	return false
+	return "NoReadyCondition", "LWE has not reported a Ready condition yet", false
+}
+
+// lweReady reads the LWE's Ready condition.
+func lweReady(lwe *unstructured.Unstructured) bool {
+	_, _, ready := lweReadyCondition(lwe)
+	return ready
 }
 
 // managedClusterJoined reads the ManagedClusterJoined condition.

@@ -93,7 +93,11 @@ func (r *AIGridReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 		if !done {
-			setGridCondition(grid, step.condition, metav1.ConditionFalse, "InProgress", "phase in progress")
+			message := "phase in progress"
+			if blocking := blockingSiteMessage(grid); blocking != "" {
+				message = blocking
+			}
+			setGridCondition(grid, step.condition, metav1.ConditionFalse, "InProgress", message)
 			requeue = true
 			break
 		}

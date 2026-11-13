@@ -80,6 +80,15 @@ type AIGridSpec struct {
 	// +optional
 	Duration string `json:"duration,omitempty"`
 
+	// ClusterQueue is the Kueue ClusterQueue backing each site's
+	// LocalQueue, separating this grid's capacity from others (e.g. CI
+	// grids apart from interactive dev grids). Optional: when unset,
+	// sites use the LWE operator's default (inference-workspaces).
+	// The LWE API treats clusterQueue as immutable: changing it requires
+	// removing and re-adding the site.
+	// +optional
+	ClusterQueue string `json:"clusterQueue,omitempty"`
+
 	// PeerGroup is the LWE peer-group label value applied to all LWEs.
 	// Defaults to the AIGrid's name.
 	// +optional
@@ -114,6 +123,12 @@ type SiteStatus struct {
 	// AppsDomain is the site's public apps domain.
 	// +optional
 	AppsDomain string `json:"appsDomain,omitempty"`
+
+	// Message carries the blocking reason while the site is not ready,
+	// taken from the LWE's own Ready condition — so `kubectl get aigrid`
+	// answers "why is this stuck" without inspecting the LWE.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // AIGridStatus is the observed state of an AIGrid.

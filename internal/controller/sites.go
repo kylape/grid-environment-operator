@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	aigridv1alpha1 "github.com/kylape/grid-environment-operator/api/v1alpha1"
@@ -47,7 +48,10 @@ func (r *AIGridReconciler) provision(ctx context.Context, grid *aigridv1alpha1.A
 	dnsLwe := object(lweGVK, grid.Namespace, DNSLweName(grid))
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dnsLwe, func() error {
 		setGridLabels(dnsLwe, grid, "")
-		return unstructured.SetNestedField(dnsLwe.Object, "Namespace", "spec", "mode")
+		if err := unstructured.SetNestedField(dnsLwe.Object, "Namespace", "spec", "mode"); err != nil {
+			return err
+		}
+		return applyClusterQueue(dnsLwe, grid)
 	}); err != nil {
 		return false, err
 	}
@@ -59,22 +63,34 @@ func (r *AIGridReconciler) provision(ctx context.Context, grid *aigridv1alpha1.A
 	grid.Status.DNSLweName = DNSLweName(grid)
 
 	// Site LWEs: HyperShift mode with the grid's pull secret.
+	siteReadiness := map[string][2]string{}
 	for _, site := range grid.Spec.Sites {
 		name := SiteName(grid, site)
 		siteLwe := object(lweGVK, grid.Namespace, name)
+		desiredSize := defaultString(site.Size, "small")
 		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, siteLwe, func() error {
 			setGridLabels(siteLwe, grid, string(site.Role))
 			if err := unstructured.SetNestedField(siteLwe.Object, "HyperShift", "spec", "mode"); err != nil {
 				return err
 			}
+			// Size is immutable on the LWE API: refuse a change here with
+			// a clear message rather than letting the apiserver reject
+			// the update generically.
+			existingSize, found, err := unstructured.NestedString(siteLwe.Object, "spec", "hypershift", "size")
+			if err != nil {
+				return err
+			}
+			if found && existingSize != "" && existingSize != desiredSize {
+				return fmt.Errorf("site %s: size %q cannot be changed to %q on an existing LWE; remove and re-add the site instead", name, existingSize, desiredSize)
+			}
 			if err := unstructured.SetNestedMap(siteLwe.Object, map[string]interface{}{
-				"size":       defaultString(site.Size, "small"),
+				"size":       desiredSize,
 				"replicas":   int64(defaultInt32(site.Replicas, 1)),
 				"pullSecret": map[string]interface{}{"name": grid.Spec.PullSecretRef.Name},
 			}, "spec", "hypershift"); err != nil {
 				return err
 			}
-			return nil
+			return applyClusterQueue(siteLwe, grid)
 		}); err != nil {
 			return false, err
 		}
@@ -84,8 +100,9 @@ func (r *AIGridReconciler) provision(ctx context.Context, grid *aigridv1alpha1.A
 		if err := r.reconcileSiteDrift(ctx, siteLwe, site); err != nil {
 			return false, err
 		}
-		if !lweReady(siteLwe) {
+		if reason, message, ready := lweReadyCondition(siteLwe); !ready {
 			allReady = false
+			siteReadiness[name] = [2]string{reason, message}
 		}
 	}
 
@@ -107,6 +124,9 @@ func (r *AIGridReconciler) provision(ctx context.Context, grid *aigridv1alpha1.A
 		}
 		if allReady {
 			status.Phase = aigridv1alpha1.SitePhaseImporting
+		}
+		if blocked, ok := siteReadiness[status.Name]; ok {
+			status.Message = strings.TrimSpace(blocked[0] + ": " + blocked[1])
 		}
 		grid.Status.Sites = append(grid.Status.Sites, status)
 	}
@@ -260,4 +280,40 @@ func defaultInt32(value, fallback int32) int32 {
 		return value
 	}
 	return fallback
+}
+
+// applyClusterQueue sets the optional per-grid Kueue ClusterQueue on an
+// LWE. The LWE API makes clusterQueue immutable, so a change on an
+// existing LWE is an error the user resolves by removing and re-adding
+// the site — never a silent update. When the grid specifies no queue, the
+// LWE's own default (inference-workspaces) applies.
+func applyClusterQueue(lwe *unstructured.Unstructured, grid *aigridv1alpha1.AIGrid) error {
+	desired := grid.Spec.ClusterQueue
+	if desired == "" {
+		return nil
+	}
+	existing, found, err := unstructured.NestedString(lwe.Object, "spec", "clusterQueue")
+	if err != nil {
+		return err
+	}
+	if found && existing != "" {
+		if existing != desired {
+			return fmt.Errorf("site %s: clusterQueue %q cannot be changed to %q on an existing LWE; remove and re-add the site instead", lwe.GetName(), existing, desired)
+		}
+		return nil
+	}
+	return unstructured.SetNestedField(lwe.Object, desired, "spec", "clusterQueue")
+}
+
+// blockingSiteMessage surfaces why a site is stuck, from the LWE's own
+// Ready condition, so `kubectl get aigrid` answers "why is this not
+// ready" without inspecting the LWE.
+func blockingSiteMessage(grid *aigridv1alpha1.AIGrid) string {
+	for i := range grid.Status.Sites {
+		site := &grid.Status.Sites[i]
+		if site.Message != "" {
+			return fmt.Sprintf("site %s: %s", site.Name, site.Message)
+		}
+	}
+	return ""
 }

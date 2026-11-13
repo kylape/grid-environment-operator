@@ -145,6 +145,21 @@ func isGridFanOutApp(name string, grid *aigridv1alpha1.AIGrid) bool {
 	return false
 }
 
+// guestServiceCA reads the service-serving CA the guest signs its
+// in-cluster service certificates with — the reencrypt route's backend
+// CA.
+func guestServiceCA(ctx context.Context, guest client.Client) (string, error) {
+	configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "openshift-service-ca.crt", Namespace: gridNamespace}}
+	if err := guest.Get(ctx, client.ObjectKeyFromObject(configMap), configMap); err != nil {
+		return "", fmt.Errorf("reading service CA on guest: %w", err)
+	}
+	certificate := configMap.Data["service-ca.crt"]
+	if certificate == "" {
+		return "", fmt.Errorf("service CA configmap has no service-ca.crt")
+	}
+	return certificate, nil
+}
+
 // annotateOperatorGroups applies the bundle-unpack retry annotation to the
 // rhods OperatorGroup on a guest, if it exists yet.
 func (r *AIGridReconciler) annotateOperatorGroups(ctx context.Context, guest client.Client) error {
@@ -234,13 +249,25 @@ func (r *AIGridReconciler) awaitGrid(ctx context.Context, grid *aigridv1alpha1.A
 		}
 
 		host := "grid-" + grid.Name + "." + site.AppsDomain
+		// The route is reencrypt rather than passthrough: the guest router
+		// terminates TLS with its ingress certificate, whose wildcard
+		// covers the route host, and re-encrypts to the gateway using the
+		// service CA. Passthrough would present the gateway's service
+		// certificate, whose SAN is the in-cluster service name — a
+		// hostname mismatch for every browser (found live).
+		serviceCA, err := guestServiceCA(ctx, guest)
+		if err != nil {
+			return false, err
+		}
 		route := object(routeGVK, gridNamespace, "grid-"+grid.Name)
 		if _, err := controllerutil.CreateOrUpdate(ctx, guest, route, func() error {
 			if err := unstructured.SetNestedField(route.Object, host, "spec", "host"); err != nil {
 				return err
 			}
 			if err := unstructured.SetNestedMap(route.Object, map[string]interface{}{
-				"termination": "passthrough",
+				"termination":                   "Reencrypt",
+				"destinationCACertificate":      serviceCA,
+				"insecureEdgeTerminationPolicy": "Redirect",
 			}, "spec", "tls"); err != nil {
 				return err
 			}

@@ -21,8 +21,17 @@ TOKEN=$(kubectl --kubeconfig "$ADMIN_KUBECONFIG" create token \
 
 SERVER=$(kubectl --kubeconfig "$ADMIN_KUBECONFIG" config view \
 	-o jsonpath='{.clusters[0].cluster.server}')
-CA=$(kubectl --kubeconfig "$ADMIN_KUBECONFIG" config view --raw \
+
+# Prefer the admin kubeconfig's embedded CA (--flatten resolves file
+# references); insecure admin kubeconfigs carry none, so fall back to the
+# cluster's published root CA, which signs the API endpoint's serving
+# certificate.
+CA=$(kubectl --kubeconfig "$ADMIN_KUBECONFIG" config view --flatten \
 	-o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
+if [ -z "$CA" ]; then
+	CA=$(kubectl --kubeconfig "$ADMIN_KUBECONFIG" -n default get cm \
+		kube-root-ca.crt -o jsonpath='{.data.ca\.crt}' | base64 -w0)
+fi
 
 cat <<EOF
 apiVersion: v1

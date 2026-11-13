@@ -16,6 +16,8 @@ spec:
         app: grid-environment-operator
     spec:
       serviceAccountName: grid-environment-operator
+      imagePullSecrets:
+        - name: grid-environment-operator-registry-auth
       containers:
         - name: manager
           image: quay.io/klape/grid-environment-operator:latest

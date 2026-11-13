@@ -5,8 +5,10 @@ import (
 	"fmt"
 
 	aigridv1alpha1 "github.com/kylape/grid-environment-operator/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -124,6 +126,25 @@ func (r *AIGridReconciler) awaitGrid(ctx context.Context, grid *aigridv1alpha1.A
 		}
 		status, connected := gridSiteConnected(gridSite)
 		grid.Status.Sites[i].GridSite = status
+
+		if site.Role == aigridv1alpha1.SiteRoleIngress {
+			// Ingress sites deploy only the consumer gateway: their
+			// GridSite structurally reports AddressMissing (no provider
+			// endpoint to self-check). Readiness for them is the
+			// consumer gateway being available.
+			gateway := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "grid-gateway", Namespace: gridNamespace}}
+			if err := guest.Get(ctx, client.ObjectKeyFromObject(gateway), gateway); err != nil {
+				allConnected = false
+				continue
+			}
+			if gateway.Status.AvailableReplicas < 1 {
+				allConnected = false
+			}
+			continue
+		}
+
+		// Inference sites run provider gateways: their GridSite Connected
+		// condition is the end-to-end path probe through the wired DNS.
 		if !connected {
 			allConnected = false
 		}

@@ -1,0 +1,97 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: grid-environment-operator
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - aigrid.llm.redhat.com
+  resources:
+  - aigrids
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - aigrid.llm.redhat.com
+  resources:
+  - aigrids/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - aigrid.llm.redhat.com
+  resources:
+  - aigrids/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - config.openshift.io
+  resources:
+  - networks
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - llm.redhat.com
+  resources:
+  - llmworkloadenvironments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch

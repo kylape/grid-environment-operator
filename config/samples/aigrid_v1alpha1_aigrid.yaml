@@ -1,0 +1,20 @@
+apiVersion: aigrid.llm.redhat.com/v1alpha1
+kind: AIGrid
+metadata:
+  name: ci-grid
+spec:
+  sites:
+  - role: hub
+    size: small
+  - role: inference
+    size: medium
+    replicas: 1
+  - role: ingress
+    size: small
+  gitOps:
+    repo: https://github.com/kylape/ai-grid-cluster-gitops
+    revision: hub-onboarding-sno-20261105
+    path: bootstrap/dedicated-hub
+  pullSecretRef:
+    name: rhai-pull-secret
+  duration: 72h

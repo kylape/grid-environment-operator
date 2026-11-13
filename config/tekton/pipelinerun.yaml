@@ -1,0 +1,25 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: grid-environment-operator-build-
+  namespace: grid-environment-operator
+spec:
+  params:
+    - name: git-revision
+      value: main
+    - name: image
+      value: quay.io/klape/grid-environment-operator:latest
+    - name: push-image
+      value: "true"
+  pipelineRef:
+    name: grid-environment-operator-build
+  taskRunTemplate:
+    serviceAccountName: grid-environment-operator-builder
+  timeouts:
+    pipeline: 30m
+  workspaces:
+    - emptyDir: {}
+      name: source
+    - name: registry-auth
+      secret:
+        secretName: grid-environment-operator-registry-auth

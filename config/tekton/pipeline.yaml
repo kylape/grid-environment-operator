@@ -1,0 +1,125 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: grid-environment-operator-build
+  namespace: grid-environment-operator
+spec:
+  params:
+    - name: git-url
+      type: string
+      default: https://github.com/kylape/grid-environment-operator.git
+    - name: git-revision
+      type: string
+      default: main
+    - name: image
+      type: string
+      default: quay.io/klape/grid-environment-operator:latest
+    - name: push-image
+      type: string
+      default: "false"
+  results:
+    - name: image-digest
+      value: $(tasks.build.results.image-digest)
+    - name: source-revision
+      value: $(tasks.build.results.source-revision)
+  workspaces:
+    - name: source
+    - name: registry-auth
+      optional: true
+  tasks:
+    - name: build
+      params:
+        - name: git-url
+          value: $(params.git-url)
+        - name: git-revision
+          value: $(params.git-revision)
+        - name: image
+          value: $(params.image)
+        - name: push-image
+          value: $(params.push-image)
+      workspaces:
+        - name: source
+          workspace: source
+        - name: registry-auth
+          workspace: registry-auth
+      taskSpec:
+        results:
+          - name: image-digest
+          - name: source-revision
+        params:
+          - name: git-url
+            type: string
+          - name: git-revision
+            type: string
+          - name: image
+            type: string
+          - name: push-image
+            type: string
+        workspaces:
+          - name: source
+          - name: registry-auth
+            optional: true
+        steps:
+          - name: clone
+            image: alpine/git:2.47.2
+            env:
+              - name: SOURCE_URL
+                value: $(params.git-url)
+              - name: SOURCE_REVISION
+                value: $(params.git-revision)
+            script: |
+              #!/bin/sh
+              set -eu
+              find "$(workspaces.source.path)" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+              git init "$(workspaces.source.path)"
+              cd "$(workspaces.source.path)"
+              git remote add origin "$SOURCE_URL"
+              git fetch --depth 1 origin "$SOURCE_REVISION"
+              git checkout --detach FETCH_HEAD
+              git rev-parse HEAD | tr -d '\n' > "$(results.source-revision.path)"
+          - name: build-manager
+            image: golang:1.25
+            env:
+              - name: GOMAXPROCS
+                value: "2"
+              - name: GOFLAGS
+                value: -p=1
+              - name: GOCACHE
+                value: /tmp/go-cache
+              - name: GOMODCACHE
+                value: /tmp/go-mod-cache
+            script: |
+              #!/bin/sh
+              set -eu
+              go test ./...
+              go vet ./...
+              CGO_ENABLED=0 go build -o /tmp/manager ./cmd/manager
+            workingDir: $(workspaces.source.path)
+          - name: build-image
+            image: quay.io/buildah/stable:v1.39.3
+            env:
+              - name: HOME
+                value: /tekton/home
+              - name: STORAGE_DRIVER
+                value: vfs
+              - name: BUILDAH_ISOLATION
+                value: chroot
+            securityContext:
+              privileged: true
+              runAsUser: 1000
+            script: |
+              #!/usr/bin/env bash
+              set -Eeuo pipefail
+              buildah bud --storage-driver=vfs --isolation=chroot --userns=host \
+                --format=oci --tag "$(params.image)" --file Dockerfile .
+              if [[ "$(params.push-image)" == "true" ]]; then
+                if [[ "$(workspaces.registry-auth.bound)" != "true" ]]; then
+                  echo "registry-auth workspace is required when push-image=true" >&2
+                  exit 1
+                fi
+                export REGISTRY_AUTH_FILE="$(workspaces.registry-auth.path)/.dockerconfigjson"
+                buildah push --storage-driver=vfs --digestfile "$(results.image-digest.path)" "$(params.image)" "docker://$(params.image)"
+              else
+                printf 'not-pushed' > "$(results.image-digest.path)"
+              fi
+            workingDir: $(workspaces.source.path)

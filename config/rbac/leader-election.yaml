@@ -1,0 +1,32 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grid-environment-operator-leader-election
+  namespace: grid-environment-operator
+rules:
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: grid-environment-operator-leader-election
+  namespace: grid-environment-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: grid-environment-operator-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: grid-environment-operator
+    namespace: grid-environment-operator

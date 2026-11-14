@@ -13,7 +13,7 @@ spec:
     size: small
   gitOps:
     repo: https://github.com/kylape/ai-grid-cluster-gitops
-    revision: hub-onboarding-sno-20261105
+    revision: hub-onboarding
     path: bootstrap/dedicated-hub
   pullSecretRef:
     name: rhai-pull-secret

@@ -1,0 +1,23 @@
+# CI PipelineRun template for this repository.
+#
+# Rendered by the polling CI service (gitlab.cee.redhat.com/klape/build):
+# it substitutes repo-url, revision, image-name and push-latest for each
+# PR head SHA and default-branch push, and injects the shared RWX source
+# workspace. Reports to GitHub as the ci/build check (plus per-task
+# contexts ci/build/lint, ci/build/test, ci/build/build-and-push).
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: build-template
+spec:
+  pipelineRef:
+    name: go-build
+  params:
+    - name: repo-url
+      value: REPLACE_BY_POLLER
+    - name: revision
+      value: REPLACE_BY_POLLER
+    - name: image-name
+      value: REPLACE_BY_POLLER
+    - name: push-latest
+      value: "false"

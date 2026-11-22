@@ -27,14 +27,36 @@ jobs:
             git fetch --depth 1 origin "${{ github.sha }}"
           fi
           git checkout --detach FETCH_HEAD
+      - name: fork ceiling probe
+        # TEMPORARY diagnostic: measure this job pod's effective fork
+        # ceiling in situ (EAGAIN root cause unproven; limits measured
+        # from outside don't explain it). Non-fatal; kills its children.
+        continue-on-error: true
+        run: |
+          echo "cgroup: $(cat /proc/self/cgroup | tail -1)"
+          echo "nproc: $(nproc)  ulimit -u: $(ulimit -u)"
+          i=0
+          while [ $i -lt 3000 ]; do
+            sleep 30 &
+            i=$((i+1))
+          done
+          echo "spawn attempted: 3000, live: $(jobs -p | wc -l)"
+          kill $(jobs -p) 2>/dev/null || true
       - name: lint
+        env:
+          # Job pods inherit a low pids cgroup limit (validated during
+          # the Tekton bring-up: uncapped go parallelism = NumCPU
+          # exhausts it with EAGAIN on fork). Cap compile parallelism
+          # and skip cgo (no gcc subprocesses).
+          GOMAXPROCS: "4"
+          CGO_ENABLED: "0"
         run: |
           set -eu
           # go install via the module proxy: the install.sh checksum
           # verification fails through this cluster's egress. v2.x is
           # required for Go 1.25+ code.
           GOBIN=/tmp/bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
-          /tmp/bin/golangci-lint run ./...
+          /tmp/bin/golangci-lint run --concurrency=4 ./...
       - name: test
         run: |
           set -eu

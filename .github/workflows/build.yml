@@ -83,7 +83,15 @@ jobs:
           echo "${{ secrets.QUAY_PASSWORD }}" | buildah login --authfile "$REGISTRY_AUTH_FILE" \
             --username "${{ secrets.QUAY_USERNAME }}" --password-stdin quay.io
           IMG="quay.io/klape/grid-environment-operator:${{ github.sha }}"
-          buildah --storage-driver=vfs bud --platform=linux/amd64 -f Dockerfile -t "$IMG" .
+          # The ci-buildah SCC force-drops KILL and MKNOD from the pod's
+          # bounding set, but buildah grants RUN children a default
+          # capability set that includes KILL — its capset then fails
+          # with EPERM ("error setting capabilities for process") at
+          # the first RUN step. Mirror the SCC drops onto the bud
+          # command; no RUN step needs them. (The old Tekton task dodged
+          # this by running its build step privileged; this workflow
+          # runs least-privilege with SYS_ADMIN + SYS_CHROOT instead.)
+          buildah --storage-driver=vfs bud --cap-drop=KILL --cap-drop=MKNOD --platform=linux/amd64 -f Dockerfile -t "$IMG" .
           buildah --storage-driver=vfs push "$IMG"
           buildah --storage-driver=vfs tag "$IMG" "quay.io/klape/grid-environment-operator:latest"
           buildah --storage-driver=vfs push "quay.io/klape/grid-environment-operator:latest"

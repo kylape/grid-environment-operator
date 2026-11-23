@@ -170,7 +170,7 @@ func probeQuayManifest(httpClient *http.Client, auth, repository, digest string)
 	if err != nil {
 		return err
 	}
-	defer tokenResponse.Body.Close()
+	defer func() { _ = tokenResponse.Body.Close() }()
 	tokenBody, _ := io.ReadAll(io.LimitReader(tokenResponse.Body, 1<<16))
 	if tokenResponse.StatusCode != http.StatusOK {
 		return fmt.Errorf("token exchange returned %d", tokenResponse.StatusCode)
@@ -193,8 +193,8 @@ func probeQuayManifest(httpClient *http.Client, auth, repository, digest string)
 	if err != nil {
 		return err
 	}
-	defer manifestResponse.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(manifestResponse.Body, 1<<16))
+	defer func() { _ = manifestResponse.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(manifestResponse.Body, 1<<16))
 	if manifestResponse.StatusCode != http.StatusOK {
 		return fmt.Errorf("manifest fetch returned %d", manifestResponse.StatusCode)
 	}

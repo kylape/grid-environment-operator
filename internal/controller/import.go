@@ -212,6 +212,11 @@ func (r *AIGridReconciler) applyImportDocuments(ctx context.Context, hub, guest 
 // agents running stale tokens forever. (Found live: the hub rotated the
 // klusterlet's bootstrap credential after the initial apply, and the join
 // hung silently on HTTP 401 until the secret was refreshed.)
+//
+// This uses the SSA patch option (client.Apply), deprecated in favor of
+// Client.Apply — but the replacement only accepts generated
+// apply-configuration types and cannot apply unstructured documents
+// parsed from YAML, so the deprecated option stays.
 func applyDocument(ctx context.Context, c client.Client, document string) error {
 	var content map[string]interface{}
 	if err := yaml.Unmarshal([]byte(document), &content); err != nil {
@@ -224,7 +229,7 @@ func applyDocument(ctx context.Context, c client.Client, document string) error 
 	if documentObject.GetKind() == "" || documentObject.GetAPIVersion() == "" {
 		return nil
 	}
-	if err := c.Patch(ctx, documentObject, client.Apply, client.ForceOwnership,
+	if err := c.Patch(ctx, documentObject, client.Apply, client.ForceOwnership, //nolint:staticcheck // SA1019: no unstructured-capable replacement; see doc comment
 		client.FieldOwner("aigrid.llm.redhat.com/import")); err != nil {
 		return fmt.Errorf("applying %s %s/%s: %w",
 			documentObject.GetKind(), documentObject.GetNamespace(), documentObject.GetName(), err)

@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	aigridv1alpha1 "github.com/kylape/grid-environment-operator/api/v1alpha1"
@@ -202,10 +201,6 @@ func (r *AIGridReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func siteNamespacedName(grid *aigridv1alpha1.AIGrid, site aigridv1alpha1.SiteSpec) types.NamespacedName {
-	return types.NamespacedName{Namespace: grid.Namespace, Name: SiteName(grid, site)}
-}
-
 // phaseDetail adapts a (bool, error) phase function to the message-carrying
 // shape used by the phase machine.
 func phaseDetail(run func(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, error)) func(ctx context.Context, grid *aigridv1alpha1.AIGrid) (bool, string, error) {
@@ -214,5 +209,3 @@ func phaseDetail(run func(ctx context.Context, grid *aigridv1alpha1.AIGrid) (boo
 		return done, "", err
 	}
 }
-
-var errNoHub = fmt.Errorf("no hub site in grid")

@@ -88,7 +88,13 @@ jobs:
           # command; no RUN step needs them. (The old Tekton task dodged
           # this by running its build step privileged; this workflow
           # runs least-privilege with SYS_ADMIN + SYS_CHROOT instead.)
-          buildah --storage-driver=vfs bud --cap-drop=KILL --cap-drop=MKNOD --platform=linux/amd64 -f Dockerfile -t "$IMG" .
+          # --ulimit: buildah's spec raises RLIMIT_NOFILE to 1048576
+          # (docker's default — why buildah-in-docker never hits this),
+          # but this cluster's runtime gives containers 524288, and
+          # raising a hard limit needs CAP_SYS_RESOURCE (privileged
+          # had it; least-privilege doesn't). Pin the spec's nofile to
+          # the pod's actual limits so the setrlimit is a no-op.
+          buildah --storage-driver=vfs bud --cap-drop=KILL --cap-drop=MKNOD --ulimit nofile=$(ulimit -Sn):$(ulimit -Hn) --platform=linux/amd64 -f Dockerfile -t "$IMG" .
           buildah --storage-driver=vfs push "$IMG"
           buildah --storage-driver=vfs tag "$IMG" "quay.io/klape/grid-environment-operator:latest"
           buildah --storage-driver=vfs push "quay.io/klape/grid-environment-operator:latest"

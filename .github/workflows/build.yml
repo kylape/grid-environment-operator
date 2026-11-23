@@ -15,6 +15,12 @@ jobs:
   check:
     runs-on: grid-operator
     container: registry.access.redhat.com/ubi9/go-toolset:1.26
+    env:
+      # Job pods have a 4096 pids cgroup budget, and Go runtimes scale
+      # their GC/runtime threads with GOMAXPROCS — an uncapped build
+      # (-p = 256 cores here) exhausts it with EAGAIN on fork. 16 keeps
+      # the whole build an order of magnitude under the wall.
+      GOMAXPROCS: "16"
     steps:
       - name: clone
         run: |
@@ -44,11 +50,7 @@ jobs:
           kill $(jobs -p) 2>/dev/null || true
       - name: lint
         env:
-          # Job pods inherit a low pids cgroup limit (validated during
-          # the Tekton bring-up: uncapped go parallelism = NumCPU
-          # exhausts it with EAGAIN on fork). Cap compile parallelism
-          # and skip cgo (no gcc subprocesses).
-          GOMAXPROCS: "4"
+          # No cgo: skips the cgo→gcc→cc1 process chains entirely.
           CGO_ENABLED: "0"
         run: |
           set -eu
@@ -56,13 +58,12 @@ jobs:
           # verification fails through this cluster's egress. v2.x is
           # required for Go 1.25+ code.
           GOBIN=/tmp/bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
-          /tmp/bin/golangci-lint run --concurrency=4 ./...
+          /tmp/bin/golangci-lint run --concurrency=16 ./...
       - name: test
         run: |
           set -eu
-          # -p caps parallel package builds: big repos fork enough
-          # compiler processes to hit the container pid limit.
-          go test -p 4 ./...
+          # -p caps parallel package builds to match GOMAXPROCS above.
+          go test -p 16 ./...
 
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

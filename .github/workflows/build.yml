@@ -69,9 +69,6 @@ jobs:
             | tar xz --strip-components=1
       - name: build-and-push
         env:
-          # Rootful buildah with vfs storage and chroot isolation; the
-          # capabilities and UID come from the job pod's hook extension.
-          _CONTAINERS_ROOTLESS_UID: "1"
           BUILDAH_ISOLATION: chroot
           REGISTRY_AUTH_FILE: /tmp/auth.json
         run: |
